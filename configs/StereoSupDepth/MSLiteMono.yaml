@@ -1,0 +1,24 @@
+_base_: '../Base/Base_Sup_Stereo_Depth.yaml'
+
+imgs_per_gpu: 1
+workers_per_gpu: 8
+
+model:
+  name: "LiteMono_crf" 
+  eval_mode: 'depth' 
+  encoder: ms_crf        
+  use_pcv: false         # 預設關掉 PCV
+
+  # Network options  
+  max_disp: 192 # 'Max disparity'
+  use_concat_volume: False
+  use_3d_decoder: False
+  use_swin_backbone: True
+  encoder: 'large'
+  pre_trained: False
+  ckpt_path: null
+  disp_head: 'classify' #'regression', 'classify'
+
+  # loss option
+  mono_weight: 0.5
+  stereo_weight: 1.0 

@@ -17,11 +17,16 @@ from .bts.bts import BtsModel
 from .midas import DPTDepthModel, MidasNet, MidasNet_small
 from .adabin import UnetAdaptiveBins
 from .newcrf import NewCRFDepth
+from .litemono import LiteMonoDepth
 
 # stereo depth network
-from .aanet import AANetModel
+try:
+    from .aanet import AANetModel  # 需要已編譯的 deform_conv_cuda
+except Exception:
+    AANetModel = None
 from .psmnet import PSMNetModel
 from .acvnet import ACVNetModel
 from .cfnet import CFNetModel
 from .gwcnet import GWCNetModel_G, GWCNetModel_GC
 from .ms_crf import MonoStereoCRFDepth
+from .LiteMono_crf import LiteMonoCRFDepth

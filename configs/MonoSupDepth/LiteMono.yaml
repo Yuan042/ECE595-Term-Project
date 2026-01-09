@@ -1,0 +1,18 @@
+_base_: '../Base/Base_Sup_Mono_Depth.yaml'
+
+model:
+  name: "LiteMono"         
+  eval_mode: 'depth'
+
+  in_chans: 1         # 單通道就設 1
+  input_height: 192   # 與 Lite-Mono 常用尺寸一致
+  input_width: 640
+
+  # 下面是會傳給 LiteMonoDepth(**kwargs) 的網路參數
+  in_channels: 1            # Thermal 單通道
+  repeat_gray_to_rgb: True  # 1ch → 3ch
+  min_depth: 1.0e-3
+  max_depth: 80.0
+  resnet_layers: 18
+  pretrained_backbone: False
+  ckpt_path: ""             

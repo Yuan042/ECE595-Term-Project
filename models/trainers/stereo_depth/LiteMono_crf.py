@@ -1,115 +1,138 @@
-# Written by Ukcheol Shin (shinwc159[at]gmail.com)
-# Reference: CVPR23 Deep_Depth_Estimation_From_Thermal_Image
+# models/trainers/stereo_depth/LiteMono_crf.py
+
 import torch
+import torch.nn.functional as F
 
-# 舊的 MS-CRF stereo depth net（路徑依你專案實際放置調整）
-from models.network.ms_crf.MonoStereoCRFDepth import MonoStereoCRFDepth as MSCRFDepth
-
-# EnLiteMono 版的 stereo depth net（保留做可選項）
-from models.network.LiteMonoEn.LiteMonoCRFDepth import MonoStereoCRFDepth as LiteMonoDepth
-
+# ← 確認這個名字跟你 models/network/__init__.py 一致
+from models.network import LiteMonoCRFDepth
 from models.registry import MODELS
 from models.trainers.stereo_depth.BaseModule import StereoDepthBaseModule
-
 from models.metrics.eval_metric import compute_depth_errors, compute_disp_errors
 from utils.visualization import *
-import inspect
 
 
-@MODELS.register_module(name='MonoStereoCRF')
-class MonoStereoCRF(StereoDepthBaseModule):
+@MODELS.register_module(name='LiteMono_crf')
+class LiteMono_crf(StereoDepthBaseModule):
     def __init__(self, opt):
         super().__init__(opt)
         self.save_hyperparameters()
 
-        enc_name = getattr(opt.model, "encoder", "ms_crf").lower()
-        self.use_litemono = enc_name in {
-            "litemono", "enlitemono", "lite-mono", "lite_mono"}
-
-        DepthCls = LiteMonoDepth if self.use_litemono else MSCRFDepth
-
-        # 共同參數
-        kwargs = dict(
+        # ======================
+        # 1. 建立網路本體
+        # ======================
+        # 先只吃 maxdisp，做法跟 GWCNet 一樣：
+        #   self.disp_net = GWCNetModel_GC(maxdisp=opt.model.max_disp)
+        # 如果 LiteMonoCRFDepth __init__ 需要更多參數
+        # （例如 use_concat_volume、encoder_model 等），
+        # 在這裡自己加上去。
+        self.disp_net = LiteMonoCRFDepth(
             maxdisp=opt.model.max_disp,
-            use_concat_volume=getattr(opt.model, "use_concat_volume", False),
-            use_3d_decoder=getattr(opt.model, "use_3d_decoder", False),
-            encoder_model=enc_name,
+            # 如果network __init__ 有這些參數，就把註解打開：
+            # use_concat_volume=getattr(opt.model, 'use_concat_volume', True),
+            # use_3d_decoder=getattr(opt.model, 'use_3d_decoder', False),
+            # encoder_model=opt.model.encoder,
+            # pretrained_encoder=getattr(opt.model, 'pretrained_encoder', None),
         )
 
-        # 可能只在某一邊才需要的參數
-        maybe_kwargs = dict(
-            use_pcv=getattr(opt.model, "use_pcv", False),
-            c_pcv=getattr(opt.model, "c_pcv", 0),
-            pcv_out=getattr(opt.model, "pcv_out", 0),
-            ppm_channels=getattr(opt.model, "ppm_channels", 512),
-            in_chans=getattr(opt.model, "in_chans", 3),
-            pre_trained=getattr(opt.model, "pre_trained", False),
-            ckpt_path=getattr(opt.model, "ckpt_path", None),
-            disp_head=getattr(opt.model, "disp_head", "classify"),
-        )
-
-        # 只保留 DepthCls 的 __init__ 真的有的參數
-        sig = inspect.signature(DepthCls)
-        for k, v in maybe_kwargs.items():
-            if k in sig.parameters:
-                kwargs[k] = v
-
-        self.disp_net = DepthCls(**kwargs)
-        print(
-            f"[StereoTrainer] Using {DepthCls.__name__} with args: {sorted(kwargs.keys())}")
-
+        # ======================
+        # 2. Loss & 參數
+        # ======================
+        self.criterion = torch.nn.functional.smooth_l1_loss
         self.max_disp = opt.model.max_disp
-        self.criterion = torch.nn.SmoothL1Loss(reduction='mean')
+
+        # 跟 GWCNet 一樣，預設 4 個尺度的 loss weight
         self.loss_weights = [0.5, 0.5, 0.7, 1.0]
 
-        # 執行時列印一次實際選到誰
-        print(
-            f"[StereoTrainer] encoder={enc_name}, use_litemono={self.use_litemono}")
-
+    # ==========================
+    # 3. Optimizer 參數
+    # ==========================
     def get_optimize_param(self):
         optim_params = [
-            {'params': self.disp_net.parameters(), 'lr': self.optim_opt.learning_rate},
+            {
+                'params': self.disp_net.parameters(),
+                'lr': self.optim_opt.learning_rate
+            },
         ]
         return optim_params
 
+    # ==========================
+    # 4. Inference（推論用）
+    # ==========================
     def inference_disp(self, left_img, right_img):
         B, C, H, W = left_img.shape
         if C == 1:
-            left_img = left_img.repeat_interleave(3, dim=1)
-            right_img = right_img.repeat_interleave(3, dim=1)
+            # 和 GWCNet 寫法一致：灰階複製成 3 channel
+            left_img = left_img.repeat_interleave(3, axis=1)
+            right_img = right_img.repeat_interleave(3, axis=1)
 
-        disp_mono, disp_stereo = self.disp_net(left_img, right_img)
-        return disp_stereo
+        pred_disp_pyramid = self.disp_net(left_img, right_img)
 
-    def inference_depth(self, left_img):
-        B, C, H, W = left_img.shape
-        if C == 1:
-            left_img = left_img.repeat_interleave(3, dim=1)
+        # 如果 LiteMonoCRFDepth 跟 GWCNet 一樣回傳 list / pyramid
+        # 那就直接拿最後一個尺度
+        if isinstance(pred_disp_pyramid, (list, tuple)):
+            return pred_disp_pyramid[-1]
 
-        prediction = self.disp_net.forward_mono(left_img)
-        return prediction
+        # 如果只回傳單一張 disparity，就直接回傳
+        return pred_disp_pyramid
 
+    # ==========================
+    # 5. 計算 loss（訓練用）
+    # ==========================
     def multiscale_loss(self, pred_disp_pyramid, gt_disp):
+        """
+        pred_disp_pyramid:
+        - 可以是 list/tuple of [B,H,W] (pyramid)
+        - 也可以是單一張 [B,H,W] Tensor
+        gt_disp: [B,H,W]，px disparity
+        """
         mask = (gt_disp > 0) & (gt_disp < self.max_disp)
         all_losses = []
-        for disp_est, weight in zip(pred_disp_pyramid, self.loss_weights):
 
-            if disp_est.size(-1) != gt_disp.size(-1):
-                disp_est = disp_est.unsqueeze(1)  # [B, 1, H, W]
-                disp_est = torch.nn.functional.interpolate(disp_est, size=(gt_disp.size(-2), gt_disp.size(-1)),
-                                                           mode='bilinear', align_corners=False) * (gt_disp.size(-1) / disp_est.size(-1))
-                disp_est = disp_est.squeeze(1)  # [B, H, W]
+        H_gt, W_gt = gt_disp.size(-2), gt_disp.size(-1)
+
+        # 確保一定是 list
+        if isinstance(pred_disp_pyramid, (list, tuple)):
+            pred_list = pred_disp_pyramid
+        else:
+            pred_list = [pred_disp_pyramid]
+
+        for disp_est, weight in zip(pred_list, self.loss_weights):
+
+            # 對齊解析度
+            if disp_est.size(-1) != W_gt:
+                H_pred, W_pred = disp_est.size(-2), disp_est.size(-1)
+
+                disp_est = disp_est.unsqueeze(1)  # [B,1,H_pred,W_pred]
+                disp_est = torch.nn.functional.interpolate(
+                    disp_est,
+                    size=(H_gt, W_gt),
+                    mode='bilinear',
+                    align_corners=False
+                ).squeeze(1)  # [B,H_gt,W_gt]
+
+                disp_est = disp_est * (W_gt / W_pred)
 
             all_losses.append(
-                weight * self.criterion(disp_est[mask], gt_disp[mask]))
-        loss = sum(all_losses)
-        return loss
+                weight * self.criterion(
+                    disp_est[mask],
+                    gt_disp[mask],
+                    size_average=True
+                )
+            )
+
+        return sum(all_losses)
 
     def get_losses(self, predictions, gt_disp):
-        disp_pyramid_mono_l, disp_pyramid_stereo = predictions
-        loss_mono = self.multiscale_loss(disp_pyramid_mono_l, gt_disp)
+
+        # predictions: (disp_pyramid_mono, disp_pyramid_stereo)
+        disp_pyramid_mono, disp_pyramid_stereo = predictions
+
+        loss_mono = self.multiscale_loss(disp_pyramid_mono, gt_disp)
         loss_stereo = self.multiscale_loss(disp_pyramid_stereo, gt_disp)
-        return self.w_mono*loss_mono + self.w_stereo*loss_stereo
+
+        # 跟原本的範本一樣，直接相加就好
+        total_loss = loss_mono + loss_stereo
+        return total_loss
 
     def on_validation_epoch_start(self):
         # clear buffer at the beginning of each val epoch
@@ -167,6 +190,12 @@ class MonoStereoCRF(StereoDepthBaseModule):
                     f'val/img_disp_depth_{batch_idx}', stack, self.current_epoch)
 
         self._val_outputs.append(errs)
+
+        if batch_idx == 0:
+            print("gt_disp range:",
+                  float(disp_gt.min()), float(disp_gt.max()))
+            print("pred_disp_stereo range:",
+                  float(pred_disp_stereo.min()), float(pred_disp_stereo.max()))
         return errs
 
     def on_validation_epoch_end(self):

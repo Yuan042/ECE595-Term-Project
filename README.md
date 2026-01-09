@@ -1,12 +1,33 @@
-# Deep Depth Estimation from Thermal Images: Dataset, Bechmark, and Analysis
+# This is my term project of ECE59500 (2025 Fall).
 
-This is the official pytorch implementation of the paper:
+The foundation is built on:
 
  >Deep Depth Estimation from Thermal Images: Dataset, Bechmark, and Analysis
  >
  >[Ukcheol Shin](https://ukcheolshin.github.io/), Jinsun Park
  >
  >[[Paper]()] [[Dataset](https://sites.google.com/view/multi-spectral-stereo-dataset/home)]
+
+Follow the original instruction attacehed belowed from the author.
+
+## Setup
+
+- For RCAC Scholar users, please refer to the environment.yaml file to set up the Conda environment.
+- Remember to download the datasets and create "datasets" folder. Follow the official instruction to store the datasets.
+- More information and implmentation results could be found in my term paper.
+
+## Goal
+
+Make the SupDepth4Thermal model more lightweight.
+
+
+
+
+
+
+
+
+
 
 
 ### Depth Estimation Results on MS2 dataset

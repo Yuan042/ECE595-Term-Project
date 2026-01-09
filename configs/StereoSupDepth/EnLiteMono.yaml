@@ -1,0 +1,25 @@
+_base_: '../Base/Base_Sup_Stereo_Depth.yaml'
+
+model:
+  name: "MonoStereoCRF" 
+  eval_mode: 'depth' 
+  # encoder 端
+  in_chans: 3              # thermal會在模型入口repeat為3ch
+  encoder: tiny            # 會映射成 'lite-mono-tiny'
+
+  # PSP / head / PCV 尺度通道
+  ppm_channels: 512        # = self.c_ppm
+  pcv_out: 32              # = self.c_pcv
+
+  # 其餘原有參數
+  max_disp: 192
+  use_concat_volume: False
+  use_3d_decoder: False
+  use_swin_backbone: False   # 現在走LiteMono，不用swin
+  pre_trained: False
+  ckpt_path: null
+  disp_head: 'classify'
+
+  # loss option
+  mono_weight: 0.5
+  stereo_weight: 1.0 
